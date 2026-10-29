@@ -9,6 +9,7 @@ add_library(xbox_video STATIC
     pc_menu_assets.c
     pc_movie_skip.c
     pc_photo.c
+    pc_speech_subtitle.c
     pc_crosshair.c
     pc_debug.c
     pc_split.c

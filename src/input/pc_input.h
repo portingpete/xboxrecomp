@@ -77,6 +77,8 @@ typedef enum PcAction {
     PC_ACTION_CYCLE_ITEM,
     PC_ACTION_BACK,
     PC_ACTION_PAUSE,
+    PC_ACTION_SPRINT,
+    PC_ACTION_JUMP,
     PC_ACTION_COUNT
 } PcAction;
 
@@ -174,6 +176,9 @@ void pc_input_native_sample_end(uint64_t token, uint32_t observed_controls);
 /* The guest's camera update ran: the player is in control. */
 void pc_input_gameplay_tick(void);
 int pc_input_gameplay_active(void);
+/* Guest thread: host-only actions; jump is one fresh press, including a short tap.
+ * Menu/movie/focus transitions discard requests. These never emit a guest pad control. */
+void pc_input_movement(int *sprint_held, int *jump_pressed);
 /* Takes every count accumulated since the last call. Returns 0 when there is nothing (or mouse
  * look is off). Otherwise *yaw/*pitch are degrees to add in BLACK's own convention: yaw grows
  * to the left, pitch grows downward; already scaled by sensitivity and Invert Y. */

@@ -10,6 +10,7 @@
 #include "pc_menu.h"
 #include "pc_video_menu.h"
 #include "pc_movie_skip.h"
+#include "pc_speech_subtitle.h"
 #include "pc_photo.h"
 #include "../input/pc_input.h"
 #include "../input/pc_controls.h"
@@ -350,7 +351,7 @@ static int video_row_named(const char *name)
 {
     static const char *const names[] = { "mode", "window", "internal", "aa", "af", "dof", "sharpen", "ao_method", "ao_quality", "reflections",
         "ray_tracing", "aspect", "fov", "scale", "filter", "vsync", "fps", "blur", "crosshair", "hitmarkers", "optional_secondaries",
-        "lod_distance", "bullet_damage", "enemy_health", "headshot_instakill", "aim_mode" };
+        "lod_distance", "bullet_damage", "enemy_health", "headshot_instakill", "aim_mode", "sprint", "jump" };
     int i;
     for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) if (!_stricmp(name, names[i])) return i;
     return -1;
@@ -743,6 +744,9 @@ static const PcMenuGlyph *glyph(const Font *f, uint16_t c)
     i = f->map[c];
     if (!i && c >= 'a' && c <= 'z') i = f->map[c - 32];
     if (!i && c >= 0xE0 && c <= 0xFE && c != 0xF7) i = f->map[c - 32];
+    /* The retail font omits A-tilde. Retain the letter if an older atlas
+     * without the composed Portuguese glyph is registered. */
+    if (!i && (c == 0xC3 || c == 0xE3)) i = f->map['A'];
     return i ? &f->glyphs[i - 1] : NULL;
 }
 
@@ -1438,8 +1442,15 @@ static const char *localized_video_literal(const char *text)
 {
     const char *active_page = m_page >= 0 && m_doc ? m_doc->page[m_page].name : m_page_name;
     int locale = pc_menu_locale();
+    if (!strcmp(text, "SPRINT") || !strcmp(text, "JUMP")) {
+        static const char *const sprint[] = { "SPRINT", "CORRER", "CORRER", "COURIR", "SPRINTEN", "CORRI" };
+        static const char *const jump[] = { "JUMP", "PULAR", "SALTAR", "SAUTER", "SPRINGEN", "SALTA" };
+        return !strcmp(text, "SPRINT") ? sprint[locale] : jump[locale];
+    }
     static const struct { const char *english, *pt, *es, *fr, *de, *it; } words[] = {
         { "VIDEO SETTINGS", "CONFIGURAÇÕES DE VÍDEO", "AJUSTES DE VÍDEO", "PARAMÈTRES VIDÉO", "VIDEOEINSTELLUNGEN", "IMPOSTAZIONI VIDEO" },
+        { "PC SETTINGS", "CONFIGURAÇÕES PC", "AJUSTES PC", "PARAMÈTRES PC", "PC-EINSTELLUNGEN", "IMPOSTAZIONI PC" },
+        { "GAMEPLAY SETTINGS", "JOGABILIDADE", "JUGABILIDAD", "JOUABILITÉ", "SPIELABLAUF", "GIOCO" },
         { "DISPLAY", "TELA", "PANTALLA", "AFFICHAGE", "ANZEIGE", "SCHERMO" },
         { "GRAPHICS", "GRÁFICOS", "GRÁFICOS", "GRAPHIQUES", "GRAFIK", "GRAFICA" },
         { "RESET TO DEFAULTS", "RESTAURAR PADRÕES", "RESTABLECER VALORES", "RÉINITIALISER", "ZURÜCKSETZEN", "RIPRISTINA PREDEFINITI" },
@@ -1484,6 +1495,7 @@ static const char *localized_video_literal(const char *text)
         { "ROLL", "INCLINAÇÃO", "GIRO", "ROULIS", "NEIGUNG", "ROLLIO" },
         { "CAMERA SPEED", "VELOCIDADE DA CÂMERA", "VELOCIDAD DE CÁMARA", "VITESSE DE LA CAMÉRA", "KAMERATEMPO", "VELOCITÀ CAMERA" },
         { "CAMERA RANGE", "ALCANCE DA CÂMERA", "ALCANCE DE CÁMARA", "PORTÉE DE LA CAMÉRA", "KAMERAREICHWEITE", "RAGGIO CAMERA" },
+        { "FREE", "LIVRE", "LIBRE", "LIBRE", "FREI", "LIBERA" },
         { "TAKE PHOTO", "TIRAR FOTO", "HACER FOTO", "PRENDRE UNE PHOTO", "FOTO AUFNEHMEN", "SCATTA FOTO" },
         { "RESET CAMERA", "REDEFINIR CÂMERA", "REINICIAR CÁMARA", "RÉINITIALISER LA CAMÉRA", "KAMERA ZURÜCKSETZEN", "RIPRISTINA CAMERA" },
         { "HIDE PANEL", "OCULTAR PAINEL", "OCULTAR PANEL", "MASQUER LE PANNEAU", "LEISTE AUSBLENDEN", "NASCONDI PANNELLO" },
@@ -1512,6 +1524,7 @@ static const char *localized_video_literal(const char *text)
     int i;
     if (!_strnicmp(active_page, "Controls", 8) || !strcmp(text, "CONTROLS")) return controls_text(text);
     if (!locale || (_stricmp(active_page, "VideoSettings") && _stricmp(active_page, "VideoDisplay") && _stricmp(active_page, "VideoGraphics") &&
+                    _stricmp(active_page, "VideoLauncher") && _stricmp(active_page, "PauseMenu") &&
                     _stricmp(active_page, "PhotoMode") && _stricmp(active_page, "Players"))) return text;
     for (i = 0; i < (int)(sizeof(words) / sizeof(words[0])); ++i)
         if (!strcmp(text, words[i].english)) {
@@ -2786,20 +2799,26 @@ static unsigned caption_rows(const uint16_t *text, uint16_t rows[PCM_CAPTION_ROW
 int pc_menu_overlay(unsigned w, unsigned h, int px, int py, unsigned pw, unsigned ph, const uint32_t **pixels, int *changed)
 {
     static uint32_t *hint, *composed;
-    static uint16_t previous_caption[PC_MOVIE_SUBTITLE_CHARS];
+    static uint16_t previous_caption[PC_SPEECH_SUBTITLE_CHARS];
     static int caption_rect[4];
     static unsigned hw, hh;
     static int overlay_was_on, hint_was_on, base_was_on, caption_was_on;
     const uint32_t *base = NULL;
-    uint16_t caption[PC_MOVIE_SUBTITLE_CHARS];
+    uint16_t caption[PC_SPEECH_SUBTITLE_CHARS], speech_caption[PC_SPEECH_SUBTITLE_CHARS];
     int base_changed = 0, overlay_changed = 0, caption_changed;
     const int base_on = page_overlay(w, h, px, py, pw, ph, &base, &base_changed);
     int hint_on = InterlockedCompareExchange(&m_movie_skip_prompt, 0, 0) && w && h && pw && ph &&
                   m_font[PCM_FONT_SMALL].pixels;
-    int subtitle_on;
+    int subtitle_on, movie_on;
     memset(caption, 0, sizeof(caption));
-    subtitle_on = w && h && pw && ph && m_font[PCM_FONT_SMALL].pixels &&
-                  pc_movie_skip_subtitle(caption, PC_MOVIE_SUBTITLE_CHARS);
+    /* Poll even when fonts/picture are not ready, so pause timing stays current.
+     * A cinematic owns the screen; its subtitles take priority over speech. */
+    subtitle_on = pc_speech_subtitle(speech_caption, PC_SPEECH_SUBTITLE_CHARS,
+                                     base_on || pc_movie_skip_active());
+    movie_on = pc_movie_skip_subtitle(caption, PC_SPEECH_SUBTITLE_CHARS);
+    if (movie_on) subtitle_on = 1;
+    else memcpy(caption, speech_caption, sizeof(caption));
+    subtitle_on = subtitle_on && pc_subtitles_enabled() && w && h && pw && ph && m_font[PCM_FONT_SMALL].pixels;
     caption_changed = subtitle_on != caption_was_on || memcmp(caption, previous_caption, sizeof(caption)) != 0;
     if (subtitle_on && (caption_rect[0] != px || caption_rect[1] != py ||
                         caption_rect[2] != (int)pw || caption_rect[3] != (int)ph)) {
@@ -2859,30 +2878,39 @@ int pc_menu_overlay(unsigned w, unsigned h, int px, int py, unsigned pw, unsigne
         if (subtitle_on) {
             uint16_t rows[PCM_CAPTION_ROWS][PCM_TEXT_CAP];
             float widths[PCM_CAPTION_ROWS], box_w = 0, box_y, centre, limit, caption_bottom;
+            float caption_size = movie_on ? 17.0f : 13.0f, line_step, padding;
             unsigned count, i;
             /* Captions belong to the displayed picture; the hint keeps its client anchor. */
             canvas_for(&c, hint, w, h, px, py, pw, ph);
             limit = ((float)(c.cr - c.cl) / c.s) - 68.0f;
             if (limit < 1.0f) limit = 1.0f;
-            count = caption_rows(caption, rows, limit);
+            count = caption_rows(caption, rows, movie_on ? limit : 1000000.0f);
             centre = (((float)c.cl + (float)c.cr) * 0.5f - c.ox) / c.s;
             for (i = 0; i < count; ++i) {
-                widths[i] = text_width(PCM_FONT_SMALL, rows[i], 17.0f);
+                widths[i] = text_width(PCM_FONT_SMALL, rows[i], caption_size);
                 box_w = fmaxf(box_w, widths[i]);
             }
-            box_w += 28.0f;
+            if (box_w > limit) {
+                const float fit = limit / box_w;
+                caption_size *= fit;
+                for (i = 0; i < count; ++i) widths[i] *= fit;
+                box_w = limit;
+            }
+            line_step = movie_on ? 22.0f : caption_size + 4.0f;
+            padding = movie_on ? 14.0f : 10.0f;
+            box_w += movie_on ? 28.0f : 20.0f;
             caption_bottom = (float)c.cb - 14.0f * c.s;
             if (hint_on) {
                 Canvas client;
                 canvas_for(&client, hint, w, h, 0, 0, w, h);
                 caption_bottom = fminf(caption_bottom, (float)h - 50.0f * client.s - 8.0f * c.s);
             }
-            box_y = (caption_bottom - c.oy) / c.s - (22.0f * count + 14.0f);
+            box_y = (caption_bottom - c.oy) / c.s - (line_step * count + padding);
             d.n = 0;
-            rect(&d, centre - box_w * 0.5f, box_y, box_w, 22.0f * count + 14.0f, 0xB8000000u, 0);
+            rect(&d, centre - box_w * 0.5f, box_y, box_w, line_step * count + padding, 0xB8000000u, 0);
             for (i = 0; i < count; ++i)
-                text_prim(&d, PCM_FONT_SMALL, centre - widths[i] * 0.5f, box_y + 7.0f + 22.0f * i,
-                          17.0f, 1.0f, 0xFFFFFFFFu, rows[i]);
+                text_prim(&d, PCM_FONT_SMALL, centre - widths[i] * 0.5f, box_y + padding * 0.5f + line_step * i,
+                          caption_size, 1.0f, 0xFFFFFFFFu, rows[i]);
             /* Draw onto the hint layer without render_region's clearing pass. */
             for (i = 0; i < (unsigned)d.n; ++i) {
                 const Prim *p = &d.prim[i];

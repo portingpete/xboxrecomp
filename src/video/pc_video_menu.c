@@ -25,7 +25,7 @@ enum {
     R_HITMARKERS = PCV_ROW_HITMARKERS, R_OPTIONAL_SECONDARIES = PCV_ROW_OPTIONAL_SECONDARIES,
     R_LOD_DISTANCE = PCV_ROW_LOD_DISTANCE, R_BULLET_DAMAGE = PCV_ROW_BULLET_DAMAGE,
     R_ENEMY_HEALTH = PCV_ROW_ENEMY_HEALTH, R_HEADSHOT_INSTAKILL = PCV_ROW_HEADSHOT_INSTAKILL, R_RESET = PCV_ROW_RESET,
-    R_DONE = PCV_ROW_DONE, R_COUNT = PCV_ROW_COUNT, R_AIM_MODE = PCV_ROW_AIM_MODE
+    R_DONE = PCV_ROW_DONE, R_COUNT = PCV_ROW_COUNT, R_AIM_MODE = PCV_ROW_AIM_MODE, R_SPRINT = PCV_ROW_SPRINT, R_JUMP = PCV_ROW_JUMP
 };
 enum { A_UP, A_DOWN, A_LEFT, A_RIGHT, A_ACCEPT, A_BACK, A_OPEN };
 
@@ -215,6 +215,8 @@ int pc_video_menu_row_change(int row, int dir)
         s.enemy_health = cycle_percent(s.enemy_health, pc_video_enemy_healths, pc_video_enemy_health_count, dir); break;
     case R_HEADSHOT_INSTAKILL:
         s.headshot_instakill = !s.headshot_instakill; break;
+    case R_SPRINT: s.sprint = !s.sprint; break;
+    case R_JUMP: s.jump = !s.jump; break;
     case R_AIM_MODE:
         s.aim_hold = !s.aim_hold; break;
     default: return 0;
@@ -534,7 +536,7 @@ static const char *const k_row_label[R_COUNT] = {
     "WINDOW MODE", "WINDOW SIZE", "INTERNAL RESOLUTION", "ANTI-ALIASING", "ANISOTROPIC FILTERING", "DEPTH OF FIELD",
     "SHARPENING", "AO METHOD", "AO QUALITY", "REFLECTIONS", "RAY TRACING (EXPERIMENTAL)", "ASPECT RATIO", "FIELD OF VIEW", "SCALING", "SCALING FILTER", "VSYNC", "FRAME RATE LIMIT",
     "MOTION BLUR", "CROSSHAIR", "HIT MARKERS", "OPTIONAL SECONDARY OBJECTIVES", "LOD DISTANCE", "BULLET DAMAGE",
-    "ENEMY HEALTH", "INSTANT-KILL HEADSHOTS", "AIM MODE", "RESET TO DEFAULTS", "DONE"
+    "ENEMY HEALTH", "INSTANT-KILL HEADSHOTS", "AIM MODE", "SPRINT", "JUMP", "RESET TO DEFAULTS", "DONE"
 };
 
 static const char *const k_row_label_pt[R_COUNT] = {
@@ -652,6 +654,8 @@ size_t pc_video_menu_row_value(int row, char *out, size_t cap)
     case R_BULLET_DAMAGE: snprintf(value, sizeof(value), "%gX", s->bullet_damage / 100.0); break;
     case R_ENEMY_HEALTH: snprintf(value, sizeof(value), "%gX", s->enemy_health / 100.0); break;
     case R_HEADSHOT_INSTAKILL: strcpy(value, s->headshot_instakill ? "ON" : "OFF"); break;
+    case R_SPRINT: strcpy(value, s->sprint ? "ON" : "OFF"); break;
+    case R_JUMP: strcpy(value, s->jump ? "ON" : "OFF"); break;
     case R_AIM_MODE: strcpy(value, s->aim_hold ? "HOLD" : "TOGGLE"); break;
     default: break;
     }
@@ -734,6 +738,12 @@ const char *pc_video_menu_row_help(int row)
     case R_HEADSHOT_INSTAKILL: return video_menu_text(
         "Your confirmed headshots kill enemies instantly. Off keeps the game's normal damage rules.",
         "Seus tiros confirmados na cabeça matam inimigos instantaneamente. Desligado mantém as regras normais de dano.");
+    case R_SPRINT: return video_menu_text(
+        "Hold the Sprint key while moving to run faster. Default: Left Shift. Off keeps original movement.",
+        "Segure a tecla Correr ao se mover para correr mais rapido. Padrao: Shift esquerdo. Desligado mantem o movimento original.");
+    case R_JUMP: return video_menu_text(
+        "Press the Jump key on the ground to jump. Default: Space. Release before jumping again.",
+        "Pressione Pular no chao para saltar. Padrao: Espaco. Solte a tecla antes de pular novamente.");
     case R_AIM_MODE: return video_menu_text(
         "Toggle keeps the original aim behavior. Hold aims only while the aim button is held.",
         "Alternar mantém a mira original. Segurar mira apenas enquanto o botão de mira estiver pressionado.");

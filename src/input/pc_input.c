@@ -159,6 +159,8 @@ const PcActionInfo pc_input_actions[PC_ACTION_COUNT] = {
     { PC_ACTION_CYCLE_ITEM,   "CYCLE_ITEM",   "Cycle item (White)", 34, "X" },
     { PC_ACTION_BACK,         "BACK",         "Back / objectives", 36, "Tab" },
     { PC_ACTION_PAUSE,        "PAUSE",        "Start (pause)",     25, "P" },
+    { PC_ACTION_SPRINT, "SPRINT", "Sprint", -1, "LShift" },
+    { PC_ACTION_JUMP, "JUMP", "Jump", -1, "Space" },
 };
 
 
@@ -514,6 +516,8 @@ int pc_input_set_binding_names(PcAction action, const char *value)
 
 static void load_script(void);
 
+static uint64_t s_jump_seen[SRC_COUNT];
+
 static void clear_state(int keep_focus_pause)
 {
     int i;
@@ -526,6 +530,7 @@ static void clear_state(int keep_focus_pause)
     memset(s_pending_count, 0, sizeof(s_pending_count));
     memset(s_source_ack, 0, sizeof(s_source_ack));
     memset(s_source_generation, 0, sizeof(s_source_generation));
+    memset(s_jump_seen, 0, sizeof(s_jump_seen));
     memset(s_native_samples, 0, sizeof(s_native_samples));
     s_neutral_barrier &= keep_focus_pause ? 1L << CTL_START : 0;
     s_dx = s_dy = 0;
@@ -702,6 +707,7 @@ static int gameplay_hold_source(unsigned source)
         for (i = 0; i < s_bindings[action].count; ++i) {
             if (!source_matches(s_bindings[action].b[i].src, source)) continue;
             if (action > PC_ACTION_MOVE_RIGHT && action != PC_ACTION_FIRE &&
+                action != PC_ACTION_SPRINT && action != PC_ACTION_JUMP &&
                 !(action == PC_ACTION_AIM && s_aim_hold_mode)) return 0;
             hold = 1;
         }
@@ -1138,6 +1144,29 @@ static int source_matches(unsigned binding, unsigned source)
     if (binding == SRC_ANY_CTRL) return source == KEY_LCTRL || source == KEY_RCTRL;
     if (binding == SRC_ANY_ALT) return source == KEY_LALT || source == KEY_RALT;
     return binding == source;
+}
+
+void pc_input_movement(int *sprint_held, int *jump_pressed)
+{
+    const uint64_t now = now_ms();
+    const int active = kbm_enabled() && pc_input_gameplay_active();
+    unsigned source;
+    int i;
+    *sprint_held = *jump_pressed = 0;
+    AcquireSRWLockExclusive(&s_pending_lock);
+    for (source = 1; source < SRC_COUNT; ++source) {
+        const int gameplay = active && s_source_context[source] == 1;
+        if (gameplay && s_down[source])
+            for (i = 0; i < s_bindings[PC_ACTION_SPRINT].count; ++i)
+                if (source_matches(s_bindings[PC_ACTION_SPRINT].b[i].src, source)) *sprint_held = 1;
+        if (s_source_generation[source] != s_jump_seen[source]) {
+            if (gameplay && (s_down[source] || (uint64_t)s_latch[source] > now))
+                for (i = 0; i < s_bindings[PC_ACTION_JUMP].count; ++i)
+                    if (source_matches(s_bindings[PC_ACTION_JUMP].b[i].src, source)) *jump_pressed = 1;
+            s_jump_seen[source] = s_source_generation[source];
+        }
+    }
+    ReleaseSRWLockExclusive(&s_pending_lock);
 }
 
 /* The same action map/menu layer as collect_controls, for one physical source.
