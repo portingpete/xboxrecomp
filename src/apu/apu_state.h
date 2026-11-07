@@ -119,6 +119,8 @@ typedef struct DSPState {
     int save_cycles;
     uint32_t interrupts;
     uint32_t frame_starts_pending;
+    uint32_t idle_polls, idle_poll_value;
+    bool idle_parked;
     uint32_t timer_ctl, timer_period;
     uint64_t timer_base, cycles_base;
     bool engine_ready;
