@@ -511,10 +511,10 @@ uint64_t mcpx_apu_dsp_mmio_read(MCPXAPUState *d, hwaddr addr,
     dsp = is_gp ? d->gp.dsp : d->ep.dsp;
     if (!dsp) return 0;
     regs = is_gp ? d->gp.regs : d->ep.regs;
-    qemu_mutex_lock(&d->lock);
+    /* An aligned 32-bit read: it must not wait for the frame thread, which keeps
+     * d->lock across whole frames. */
     result = addr == NV_PAPU_GPRST ? regs[addr]
                                   : dsp->core.pram[(addr - NV_PAPU_GPPMEM) / 4];
-    qemu_mutex_unlock(&d->lock);
     return result;
 }
 
