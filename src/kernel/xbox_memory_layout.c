@@ -916,7 +916,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
                                + g_memory_offset) = GetTickCount();
 
-        Sleep(0);  /* yield; the waiter is spinning on another core */
+        { int spin; for (spin = 0; spin < 256; spin++) YieldProcessor(); }  /* a system call on every turn costs more than it yields */
     }
     return 0;
 }

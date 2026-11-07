@@ -2225,6 +2225,7 @@ uint32_t xbox_GetConnectedInterrupt(uint32_t vector);   /* defined below */
 #define XBOX_MAX_VECTORS 32
 typedef struct InterruptServiceGuard {
     void (*enter)(void *);
+    int (*try_enter)(void *);
     void (*leave)(void *);
     void *context;
 } InterruptServiceGuard;
@@ -2242,6 +2243,15 @@ BOOLEAN xbox_SetInterruptServiceGuard(uint32_t vector,
     g_interrupt_service_guards[vector].enter = enter;
     g_interrupt_service_guards[vector].leave = leave;
     g_interrupt_service_guards[vector].context = context;
+    g_interrupt_service_guards[vector].try_enter = NULL;
+    return TRUE;
+}
+
+BOOLEAN xbox_SetInterruptServiceTryEnter(uint32_t vector, int (*try_enter)(void *))
+{
+    if (vector >= XBOX_MAX_VECTORS || !g_interrupt_service_guards[vector].enter)
+        return FALSE;
+    g_interrupt_service_guards[vector].try_enter = try_enter;
     return TRUE;
 }
 
@@ -2271,7 +2281,14 @@ static int kernel_raise_interrupt(uint32_t vector)
         xbox_IrqlEnterIsr(&saved);
         bridge_publish_irql();
         guard = g_interrupt_service_guards[vector];
-        if (guard.enter) guard.enter(guard.context);
+        if (guard.try_enter) {
+            if (!guard.try_enter(guard.context)) {
+                xbox_IrqlLeaveIsr(saved);
+                bridge_publish_irql();
+                g_esp += 12;   /* the context, kint and return slots pushed above */
+                return -2;
+            }
+        } else if (guard.enter) guard.enter(guard.context);
         fn();
         if (guard.leave) guard.leave(guard.context);
         xbox_IrqlLeaveIsr(saved);
