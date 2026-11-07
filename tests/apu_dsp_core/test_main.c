@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define DSP56300_TEST_RAM_WORDS 4096u
+#define DSP_TEST_START_FRAME (1u << 1)
 
 static int check_dsp_trace_event_flags(void)
 {
@@ -210,6 +211,50 @@ static int check_mixbuffer_alias(void)
     }
     mcpx_dsp_engine_destroy(&dsp);
     return 0;
+}
+
+/* A program polling for the frame start leaves the frame early, without
+ * looking halted; one that sees the bit moves on and keeps its whole budget. */
+static int check_status_poll_leaves_the_frame(void)
+{
+    MCPXAPUState *apu = (MCPXAPUState *)calloc(1, sizeof(*apu));
+    float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME] = {{0}};
+    int result = 0;
+    if (!apu) return 1;
+
+    mcpx_apu_dsp_init(apu);
+    if (!apu->gp.dsp || !apu->gp.dsp->engine_ready) {
+        result = 2;
+        goto done;
+    }
+    apu->gp.dsp->core.pram[0] = 0x0A8581; /* JCLR #1,X:$FFFFC5,$0 */
+    apu->gp.dsp->core.pram[1] = 0;
+    apu->gp.dsp->core.pram[2] = 0x0C0002; /* JMP $2 */
+    apu->gp.regs[NV_PAPU_GPRST] =
+        NV_PAPU_GPRST_GPRST | NV_PAPU_GPRST_GPDSPRST;
+    mcpx_apu_dsp_frame(apu, mixbins);
+    if (apu->gp.dsp->core.is_idle || apu->gp.dsp->core.pc > 1 ||
+        apu->gp.dsp->core.cycle_count == 0 ||
+        apu->gp.dsp->core.cycle_count >= 8000u) {
+        fprintf(stderr, "Polling frame: idle %d, PC %X, %u cycles\n",
+                (int)apu->gp.dsp->core.is_idle, apu->gp.dsp->core.pc,
+                apu->gp.dsp->core.cycle_count);
+        result = 3;
+        goto done;
+    }
+    apu->gp.dsp->interrupts |= DSP_TEST_START_FRAME;
+    mcpx_apu_dsp_frame(apu, mixbins);
+    if (apu->gp.dsp->core.pc != 2 ||
+        apu->gp.dsp->core.cycle_count < 88000u) {
+        fprintf(stderr, "Frame after the start bit: PC %X, %u cycles\n",
+                apu->gp.dsp->core.pc, apu->gp.dsp->core.cycle_count);
+        result = 4;
+    }
+
+done:
+    mcpx_apu_dsp_finalize(apu);
+    free(apu);
+    return result;
 }
 
 static int check_apu_frame_runs_enabled_core(void)
@@ -734,6 +779,11 @@ int main(void)
     if (result) {
         fprintf(stderr, "APU DSP frame scheduling test failed (%d)\n", result);
         return result + 40;
+    }
+    result = check_status_poll_leaves_the_frame();
+    if (result) {
+        fprintf(stderr, "DSP status poll test failed (%d)\n", result);
+        return result + 45;
     }
     result = test_dsp_dma_transfer();
     if (result) {
