@@ -714,6 +714,48 @@ uint64_t mcpx_apu_vp_read(void *opaque, hwaddr addr, unsigned int size)
 
 extern volatile LONG g_apu_pio_waiters;
 
+/* PIO methods wait here for the frame thread, which holds d->lock for a whole
+ * frame: a title writing hundreds of methods a frame no longer stops for each.
+ * Order is kept, and a method runs within a frame, as it did when the caller
+ * waited for the lock. */
+#define PIO_QUEUE 16384
+static struct { uint32_t method, argument; } s_pio_queue[PIO_QUEUE];
+static volatile LONG s_pio_lock;
+static LONG s_pio_head, s_pio_tail;
+
+static int pio_queue_push(uint32_t method, uint32_t argument)
+{
+    int pushed = 0;
+    while (InterlockedExchange(&s_pio_lock, 1)) YieldProcessor();
+    if (s_pio_tail - s_pio_head < PIO_QUEUE) {
+        s_pio_queue[s_pio_tail % PIO_QUEUE].method = method;
+        s_pio_queue[s_pio_tail % PIO_QUEUE].argument = argument;
+        s_pio_tail++;
+        pushed = 1;
+    }
+    InterlockedExchange(&s_pio_lock, 0);
+    return pushed;
+}
+
+/* d->lock held. */
+void mcpx_apu_pio_drain(MCPXAPUState *d)
+{
+    for (;;) {
+        uint32_t method, argument;
+        int have = 0;
+        while (InterlockedExchange(&s_pio_lock, 1)) YieldProcessor();
+        if (s_pio_head != s_pio_tail) {
+            method = s_pio_queue[s_pio_head % PIO_QUEUE].method;
+            argument = s_pio_queue[s_pio_head % PIO_QUEUE].argument;
+            s_pio_head++;
+            have = 1;
+        }
+        InterlockedExchange(&s_pio_lock, 0);
+        if (!have) return;
+        fe_method(d, method, argument);
+    }
+}
+
 void mcpx_apu_vp_write(void *opaque, hwaddr addr, uint64_t val,
                         unsigned int size)
 {
@@ -724,9 +766,17 @@ void mcpx_apu_vp_write(void *opaque, hwaddr addr, uint64_t val,
      * calls arrive from several host threads, unlike the original CPU, and
      * must not race that publication or one another. The shim's mutex is
      * recursive, as VOICE_LOCK also takes it. */
+    if (pio_queue_push((uint32_t)addr, (uint32_t)val)) {
+        if (TryEnterCriticalSection(&d->lock.cs)) {
+            mcpx_apu_pio_drain(d);
+            qemu_mutex_unlock(&d->lock);
+        }
+        return;
+    }
     InterlockedIncrement(&g_apu_pio_waiters);
     mcpx_apu_lock(d);
     InterlockedDecrement(&g_apu_pio_waiters);
+    mcpx_apu_pio_drain(d);
     fe_method(d, (uint32_t)addr, (uint32_t)val);
     qemu_mutex_unlock(&d->lock);
 }
