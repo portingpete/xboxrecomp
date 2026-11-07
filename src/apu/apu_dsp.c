@@ -279,9 +279,29 @@ static uint64_t dsp_cycles_total(const DSPState *dsp)
         (dsp->engine_ready ? dsp56300_cycle_count(dsp->engine.jit) : 0);
 }
 
+/* A program that only reads the interrupt status, always the same value, is
+ * waiting for the next frame: nothing it can see changes before then. BLACK's
+ * EP spends every frame here, about 17000 peripheral callbacks each. Leave the
+ * frame through the HALT path after a few reads; dsp_run_frame takes the HALT
+ * back, so the frame start logic sees a program that never stopped. */
+#define DSP_IDLE_POLLS 16u
+
+static void dsp_note_status_poll(DSPState *dsp, uint32_t value)
+{
+    if (value & DSP_START_FRAME_INTERRUPT) return;
+    if (dsp->idle_polls && value != dsp->idle_poll_value) dsp->idle_polls = 0;
+    dsp->idle_poll_value = value;
+    if (++dsp->idle_polls >= DSP_IDLE_POLLS &&
+        !dsp56300_halt_requested(dsp->engine.jit)) {
+        dsp56300_set_halt_requested(dsp->engine.jit, true);
+        dsp->idle_parked = true;
+    }
+}
+
 static uint32_t dsp_read_peripheral(void *opaque, uint32_t address)
 {
     DSPState *dsp = (DSPState *)opaque;
+    if (address != 0xFFFFC5) dsp->idle_polls = 0;
     switch (address) {
     case 0xFFFFB0: return dsp->timer_ctl;
     case 0xFFFFB2: return dsp->timer_period;
@@ -291,9 +311,12 @@ static uint32_t dsp_read_peripheral(void *opaque, uint32_t address)
         if (dsp->is_gp && (dsp->timer_ctl & 1))
             return (uint32_t)(dsp_cycles_total(dsp) - dsp->timer_base) & 0xFFFFFFu;
         return 0;
-    case 0xFFFFC5:
-        return dsp->interrupts | dsp->dma.pending_interrupts |
-               (dsp->dma.eol ? DSP_DMA_EOL_INTERRUPT : 0);
+    case 0xFFFFC5: {
+        uint32_t status = dsp->interrupts | dsp->dma.pending_interrupts |
+                          (dsp->dma.eol ? DSP_DMA_EOL_INTERRUPT : 0);
+        dsp_note_status_poll(dsp, status);
+        return status;
+    }
     case 0xFFFFD4: return dsp_dma_read(&dsp->dma, DMA_NEXT_BLOCK);
     case 0xFFFFD5: return dsp_dma_read(&dsp->dma, DMA_START_BLOCK);
     case 0xFFFFD6: return dsp_dma_read(&dsp->dma, DMA_CONTROL);
@@ -305,6 +328,7 @@ static uint32_t dsp_read_peripheral(void *opaque, uint32_t address)
 static void dsp_write_peripheral(void *opaque, uint32_t address, uint32_t value)
 {
     DSPState *dsp = (DSPState *)opaque;
+    dsp->idle_polls = 0;
     switch (address) {
     case 0xFFFFB0:
         dsp->timer_ctl = value;
@@ -412,6 +436,8 @@ static void dsp_reset_core(DSPState *dsp)
     dsp->save_cycles = 0;
     dsp->interrupts = 0;
     dsp->frame_starts_pending = 0;
+    dsp->idle_polls = 0;
+    dsp->idle_parked = false;
     dsp->timer_ctl = 0;
     dsp->timer_period = 0;
     dsp->timer_base = 0;
@@ -454,7 +480,12 @@ static void dsp_run_frame(DSPState *dsp, bool start_frame)
     state.cycle_count = 0;
     state.halt_requested = false;
     dsp56300_set_state(dsp->engine.jit, &state);
+    dsp->idle_polls = 0;
     dsp56300_run(dsp->engine.jit, (int32_t)DSP_FRAME_CYCLES);
+    if (dsp->idle_parked) {
+        dsp->idle_parked = false;
+        dsp56300_set_halt_requested(dsp->engine.jit, false);
+    }
     dsp56300_get_state(dsp->engine.jit, &state);
     if (state.power_state != 0)
         dsp56300_set_halt_requested(dsp->engine.jit, true);
@@ -511,10 +542,10 @@ uint64_t mcpx_apu_dsp_mmio_read(MCPXAPUState *d, hwaddr addr,
     dsp = is_gp ? d->gp.dsp : d->ep.dsp;
     if (!dsp) return 0;
     regs = is_gp ? d->gp.regs : d->ep.regs;
-    qemu_mutex_lock(&d->lock);
+    /* An aligned 32-bit read: it must not wait for the frame thread, which keeps
+     * d->lock across whole frames. */
     result = addr == NV_PAPU_GPRST ? regs[addr]
                                   : dsp->core.pram[(addr - NV_PAPU_GPPMEM) / 4];
-    qemu_mutex_unlock(&d->lock);
     return result;
 }
 

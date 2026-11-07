@@ -45,6 +45,7 @@ void mcpx_apu_set_irq_line(void (*line)(int asserted));
  * call begin after entering ISR IRQL and end before leaving it. Recursive
  * device MMIO is allowed. Stop/unregister delivery before device shutdown. */
 void mcpx_apu_irq_service_begin(void *opaque);
+int mcpx_apu_irq_service_try(void *opaque);
 void mcpx_apu_irq_service_end(void *opaque);
 
 /* Print the front end's state and every listed voice (for a hang report). */

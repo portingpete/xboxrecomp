@@ -182,18 +182,31 @@ static void kgq_publish_frame(unsigned slot, uint64_t value, uint32_t va, uint32
     xbox_FramebufferPublishGpu(slot, value, va, aspect_w, aspect_h);
 }
 
+extern int xbox_IdleWaitEnabled(void);
+extern int xbox_IdleWait(unsigned int microseconds);
+
+/* How long the last sleep below took: a frame is only slept on when twice that is left before its time. */
+static long long s_b_nap_ticks;
+
 static void kgq_b_wait(uint64_t rd)
 {
+    const int spin_limit = xbox_IdleWaitEnabled() ? 100 : 8000;
     int i;
-    for (i = 0; i < 8000; i++) {
+    for (i = 0; i < spin_limit; i++) {
         if ((uint64_t)s_kq_wr != rd) return;
         if (s_pend_n) kgq_pub_poll();
         _mm_pause();
     }
     if (s_pend_n) {
-        /* a frame waits for its time: stay awake for it */
+        /* a frame waits for its time: sleep while it is far off, and stay awake for the end of the wait */
         while ((uint64_t)s_kq_wr == rd && s_pend_n) {
+            long long now;
             kgq_pub_poll();
+            now = qpc_now();
+            if (s_pend_n && s_pend[0].at - now > 2 * s_b_nap_ticks && xbox_IdleWait(200)) {
+                s_b_nap_ticks = qpc_now() - now;
+                continue;
+            }
             _mm_pause();                       /* not SwitchToThread: giving the core away can cost a whole time slice */
         }
         return;

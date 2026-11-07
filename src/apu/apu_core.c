@@ -79,6 +79,14 @@ void mcpx_apu_irq_service_begin(void *opaque)
     if (d) qemu_mutex_lock(&d->lock);
 }
 
+/* The same without waiting: the frame thread keeps the lock across frames, and
+ * a caller blocked here at interrupt level holds up every other device. */
+int mcpx_apu_irq_service_try(void *opaque)
+{
+    MCPXAPUState *d = (MCPXAPUState *)opaque;
+    return !d || TryEnterCriticalSection(&d->lock.cs);
+}
+
 void mcpx_apu_irq_service_end(void *opaque)
 {
     MCPXAPUState *d = (MCPXAPUState *)opaque;
@@ -139,12 +147,16 @@ void mcpx_apu_publish_pending_irq(MCPXAPUState *d)
  * MMIO Read / Write
  * ============================================================ */
 
+extern volatile LONG g_apu_pio_waiters;
+void mcpx_apu_pio_drain(MCPXAPUState *d);
+
 uint64_t mcpx_apu_read(void *opaque, hwaddr addr, unsigned int size)
 {
     MCPXAPUState *d = (MCPXAPUState *)opaque;
     uint64_t r = 0;
 
-    qemu_mutex_lock(&d->lock);
+    /* A register read is atomic and has no side effect: it must not wait for
+     * the frame thread, which keeps d->lock across whole frames. */
     switch (addr) {
     case NV_PAPU_XGSCNT:
         r = (uint64_t)(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 100);
@@ -161,7 +173,6 @@ uint64_t mcpx_apu_read(void *opaque, hwaddr addr, unsigned int size)
      *         (unsigned long long)addr, size, (unsigned long long)r);
      */
     (void)size;
-    qemu_mutex_unlock(&d->lock);
     return r;
 }
 
@@ -176,7 +187,11 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
      */
     (void)size;
 
+    /* Ask for a hand-off, as PIO methods do, instead of waiting up to eight
+     * frames for the next throttle. */
+    InterlockedIncrement(&g_apu_pio_waiters);
     qemu_mutex_lock(&d->lock);
+    InterlockedDecrement(&g_apu_pio_waiters);
     switch (addr) {
     case NV_PAPU_ISTS:
         qatomic_and(&d->regs[NV_PAPU_ISTS], ~(uint32_t)val);
@@ -730,6 +745,7 @@ static void se_frame(MCPXAPUState *d)
     float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME];
     memset(mixbins, 0, sizeof(mixbins));
 
+    mcpx_apu_pio_drain(d);
     mcpx_apu_vp_frame(d, mixbins);
     mcpx_apu_dsp_frame(d, mixbins);
     mcpx_apu_monitor_frame(d);

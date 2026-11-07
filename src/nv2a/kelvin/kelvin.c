@@ -708,6 +708,8 @@ static uint32_t pusher_run(KelvinState *pg, uint32_t put)
 
 volatile DWORD g_kelvin_pusher_tid;
 extern void xbox_PinThread(const char *role);
+extern int xbox_IdleWaitEnabled(void);
+extern int xbox_IdleWait(unsigned int microseconds);
 
 static DWORD WINAPI kelvin_thread(LPVOID arg)
 {
@@ -806,17 +808,19 @@ static DWORD WINAPI kelvin_thread(LPVOID arg)
         if (!done) {
             long long t0 = kelvin_ticks();
             /* Nothing to do: wait for PUT to move, or for what the engine is waiting on to be cleared, spinning a
-             * little before giving the processor away (a Sleep(0) is a system call at every turn). */
+             * little before sleeping. PUT is guest memory, so there is no event to wait on, and a Sleep(0) gives
+             * nothing back on an otherwise idle core. */
+            const unsigned int spin_limit = xbox_IdleWaitEnabled() ? 100 : 3000;
             unsigned int spins;
             bool was_stalled = pg->waiting_for_nop || pg->waiting_for_context_switch || pg->waiting_for_flip;
-            for (spins = 0; spins < 3000; spins++) {
+            for (spins = 0; spins < spin_limit; spins++) {
                 bool stalled;
                 _mm_pause();
                 stalled = pg->waiting_for_nop || pg->waiting_for_context_switch || pg->waiting_for_flip;
                 if (stalled != was_stalled) break;
                 if (!stalled && kelvin_aperture_r32(KELVIN_USER_DMA_PUT) != s_push.get) break;
             }
-            if (spins == 3000) Sleep(0);
+            if (spins == spin_limit && !xbox_IdleWait(200)) Sleep(0);
             kelvin_render_trace_event(3, t0, kelvin_ticks(), (uint32_t)waited);
         }
     }

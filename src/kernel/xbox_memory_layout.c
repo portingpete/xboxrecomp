@@ -765,6 +765,7 @@ static void framebuffer_probe_tick(void)
 }
 
 extern void xbox_PinThread(const char *role);
+extern int xbox_IdleWait(unsigned int microseconds);
 
 /* Something else that wants a poll on every turn of the acknowledger's loop (the audio DSP's command doorbell, which the
  * stub DSP can only say is done; polled here the title's spin on it ends in microseconds instead of at the next audio
@@ -916,7 +917,11 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
                                + g_memory_offset) = GetTickCount();
 
-        Sleep(0);  /* yield; the waiter is spinning on another core */
+        /* Nothing wakes this loop, and a whole core spent on it buys nothing: what it mirrors is read a frame at a time. */
+        if (!xbox_IdleWait(200)) {
+            int spin;
+            for (spin = 0; spin < 256; spin++) YieldProcessor();  /* a system call on every turn costs more than it yields */
+        }
     }
     return 0;
 }
