@@ -14,11 +14,20 @@
  * classes (a hybrid part): the busiest roles take performance cores in that order, one physical core each (both of its
  * hardware threads stay in the mask, so the thread may move between them but nothing else is put on that core on
  * purpose), and the polling roles take the efficiency cores.
+ *
+ * xbox_IdleWait(us) sleeps for a thread whose wait has no event to block on: it polls guest memory or a clock. Spinning
+ * there keeps a core busy for nothing. Windows rounds the sleep up to its timer period, 1 ms once the vblank thread has
+ * called timeBeginPeriod; Wine honours microseconds.
+ *
+ *   RECOMP_IDLE_WAIT=0              keep spinning: xbox_IdleWait returns 0 without sleeping
  */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <time.h>
+#endif
 
 typedef struct PCore { KAFFINITY mask; BYTE eff; } PCore;
 
@@ -71,6 +80,42 @@ static void topology_init(void)
             }
         }
     }
+}
+
+int xbox_IdleWaitEnabled(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_IDLE_WAIT");
+        on = !(e && *e == '0');
+    }
+    return on;
+}
+
+int xbox_IdleWait(unsigned int microseconds)
+{
+#if defined(_WIN32)
+    typedef LONG (WINAPI *NtDelayExecutionFn)(BOOLEAN, PLARGE_INTEGER);
+    static NtDelayExecutionFn delay;
+    LARGE_INTEGER interval;
+
+    if (!xbox_IdleWaitEnabled()) return 0;
+    if (!delay) delay = (NtDelayExecutionFn)(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtDelayExecution");
+    if (!delay) {
+        Sleep(1);
+        return 1;
+    }
+    interval.QuadPart = -(LONGLONG)microseconds * 10;   /* relative, in 100 ns units */
+    delay(FALSE, &interval);
+#else
+    struct timespec interval;
+
+    if (!xbox_IdleWaitEnabled()) return 0;
+    interval.tv_sec = microseconds / 1000000u;
+    interval.tv_nsec = (long)(microseconds % 1000000u) * 1000L;
+    nanosleep(&interval, NULL);
+#endif
+    return 1;
 }
 
 static const char *const s_roles[] = { "MAIN", "PUSHER", "GPU", "VBLANK", "ACK", "WORKER" };
