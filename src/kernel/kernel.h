@@ -820,6 +820,10 @@ void xbox_SetInterruptLine(uint32_t vector, int asserted);
 BOOLEAN xbox_SetInterruptServiceGuard(uint32_t vector,
                                      void (*enter)(void *),
                                      void (*leave)(void *), void *context);
+/* Optional, on a vector with a guard: enter without waiting. It returns nonzero
+ * with the guard entered, or 0 to leave the line up for the next delivery pass,
+ * so a busy device does not hold up every other interrupt at ISR IRQL. */
+BOOLEAN xbox_SetInterruptServiceTryEnter(uint32_t vector, int (*try_enter)(void *));
 #define XBOX_APU_VECTOR 5u    /* MCPX APU */
 
 /* KeTickCount - exported as a data pointer, not a function */

@@ -79,6 +79,14 @@ void mcpx_apu_irq_service_begin(void *opaque)
     if (d) mcpx_apu_lock(d);
 }
 
+/* The same without waiting: the frame thread keeps the lock across frames, and
+ * a caller blocked here at interrupt level holds up every other device. */
+int mcpx_apu_irq_service_try(void *opaque)
+{
+    MCPXAPUState *d = (MCPXAPUState *)opaque;
+    return !d || TryEnterCriticalSection(&d->lock.cs);
+}
+
 void mcpx_apu_irq_service_end(void *opaque)
 {
     MCPXAPUState *d = (MCPXAPUState *)opaque;
