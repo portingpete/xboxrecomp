@@ -6,7 +6,8 @@
 #define PC_SUBTITLE_COLUMNS 42
 #define PC_SUBTITLE_ROWS 2
 /* Complete words, at most 42 characters per line. Longer text is paged over
- * its audio/cue duration. A final page remains until playback ends. */
+ * its audio/cue duration. A final page remains until playback ends, and at
+ * most 1.5 s past the cue's duration when the end is never reported. */
 int pc_subtitle_page(const uint16_t *text, uint64_t elapsed, unsigned duration,
                      unsigned rows, uint16_t *out, unsigned capacity);
 /* Only actual playback enters here. Loading/prefetching a bank is not a cue. */

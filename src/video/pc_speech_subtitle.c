@@ -21,6 +21,9 @@ static unsigned m_count;
 /* Two simultaneously audible speakers; a third replaces the oldest caption. */
 static PlayingCue m_playing[2];
 static uint64_t m_polled;
+/* A clip whose end never reaches the stop hooks (the opening montage shares level ambience's UID) leaves the screen
+ * this long after its own length, instead of keeping its last page up until another line replaces it. */
+#define PC_SPEECH_LINGER_MS 1500u
 static int m_paused;
 
 int pc_subtitles_enabled(void)
@@ -268,6 +271,10 @@ int pc_speech_subtitle(uint16_t *out, unsigned capacity, int paused)
         PlayingCue *p = &m_playing[i];
         if (!p->cue) continue;
         if (m_paused && now >= m_polled) p->started += now - m_polled;
+        if (now >= p->started + p->cue->duration + PC_SPEECH_LINGER_MS) {
+            memset(p, 0, sizeof(*p));
+            continue;
+        }
         if (!paused) {
             uint16_t page[PC_SUBTITLE_ROWS * (PC_SUBTITLE_COLUMNS + 1)];
             unsigned n = 0;
