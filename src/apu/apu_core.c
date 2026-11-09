@@ -80,11 +80,23 @@ void mcpx_apu_irq_service_begin(void *opaque)
 }
 
 /* The same without waiting: the frame thread keeps the lock across frames, and
- * a caller blocked here at interrupt level holds up every other device. */
+ * a caller blocked here at interrupt level holds up every other device. A
+ * declined delivery is not a lock waiter, so it is recorded instead: the next
+ * epoch re-raises the line and opens the same handoff a blocked caller gets,
+ * and an overloaded DSP cannot keep the ISR out. */
 int mcpx_apu_irq_service_try(void *opaque)
 {
     MCPXAPUState *d = (MCPXAPUState *)opaque;
-    return !d || TryEnterCriticalSection(&d->lock.cs);
+    if (!d) return 1;
+    if (!TryEnterCriticalSection(&d->lock.cs)) {
+        InterlockedExchange(&d->irq_service_declined, 1);
+        return 0;
+    }
+    /* A handoff opened for this delivery ends with it; one held for a blocked
+     * caller still waits for that caller (mcpx_apu_lock signals then). */
+    if (d->lock_handoff_waiting && !InterlockedCompareExchange(&d->lock_waiters, 0, 0))
+        qemu_cond_signal(&d->lock_handoff_cond);
+    return 1;
 }
 
 void mcpx_apu_irq_service_end(void *opaque)
@@ -192,6 +204,9 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
     InterlockedIncrement(&g_apu_pio_waiters);
     mcpx_apu_lock(d);
     InterlockedDecrement(&g_apu_pio_waiters);
+    /* Methods written before this register run first, as they did when each
+     * method waited for the lock (a FECTL or SECTL change must not overtake them). */
+    mcpx_apu_pio_drain(d);
     switch (addr) {
     case NV_PAPU_ISTS:
         qatomic_and(&d->regs[NV_PAPU_ISTS], ~(uint32_t)val);
@@ -702,8 +717,16 @@ static void throttle(MCPXAPUState *d)
      * below may never release the device mutex. Register MMIO, IRQ service
      * and shutdown are not PIO waiters and cannot use the per-frame PIO
      * handoff. Service contention independently of pacing; the frame loop
-     * rechecks exit/pause/front-end state on return. */
-    mcpx_apu_handoff(d);
+     * rechecks exit/pause/front-end state on return. A declined interrupt
+     * delivery (mcpx_apu_irq_service_try) is served the same way: the line is
+     * recomputed, which wakes the timer thread, and its retry finds the lock
+     * free during the handoff. One attempt per decline. */
+    {
+        const bool irq_declined = InterlockedExchange(&d->irq_service_declined, 0) != 0;
+        if (irq_declined)
+            update_irq(d);
+        mcpx_apu_handoff(d, irq_declined);
+    }
 
     int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 
@@ -822,6 +845,7 @@ static void *mcpx_apu_frame_thread(void *arg)
     while (!qatomic_read(&d->exiting)) {
         if (d->pause_requested && !g_test_tone.active && !g_mixer_active_count &&
             !mixer_output_tail_pending()) {
+            mcpx_apu_pio_drain(d);   /* no se_frame will take them */
             d->is_idle = true;
             qemu_cond_signal(&d->idle_cond);
             qemu_cond_wait(&d->cond, &d->lock);
@@ -862,6 +886,7 @@ static void *mcpx_apu_frame_thread(void *arg)
         if (!apu_active && !g_test_tone.active && !g_mixer_active_count &&
             !mixer_output_tail_pending()) {
             if (d->trace_output) ++g_monitor_packet.gated_waits;
+            mcpx_apu_pio_drain(d);   /* no se_frame will take them */
             qemu_cond_timedwait(&d->cond, &d->lock, 5);
             continue;
         }

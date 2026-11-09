@@ -2719,6 +2719,7 @@ static void kernel_device_interrupts(void)
             int claimed = kernel_raise_interrupt(v);
             if (said[v]++ < 3) {
                 fprintf(stderr, "  [KERNEL] interrupt %u -> ISR %s\n", v,
+                        claimed == -2 ? "deferred (device busy)" :
                         claimed < 0 ? "not callable" :
                         claimed ? "claimed it" : "declined it");
                 fflush(stderr);

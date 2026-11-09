@@ -466,6 +466,9 @@ struct MCPXAPUState {
     QemuCond idle_cond;
     QemuCond lock_handoff_cond;
     volatile LONG lock_waiters;
+    /* The interrupt guard found the lock busy and left the line up: the next
+     * epoch hands the lock off, as for a blocked caller (mcpx_apu_irq_service_try). */
+    volatile LONG irq_service_declined;
     bool lock_handoff_waiting; /* Protected by lock. */
     bool pause_requested;
     bool is_idle;

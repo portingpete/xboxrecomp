@@ -16,9 +16,9 @@ static inline void mcpx_apu_lock(MCPXAPUState *d)
  * immediately reacquiring it can still starve a waiter under Wine. Wait for an
  * acquiring caller to signal instead. The timeout bounds audio's wait if that
  * caller is descheduled; no delay is added when the mutex is uncontended. */
-static inline void mcpx_apu_handoff(MCPXAPUState *d)
+static inline void mcpx_apu_handoff(MCPXAPUState *d, bool irq_declined)
 {
-    if (!InterlockedCompareExchange(&d->lock_waiters, 0, 0))
+    if (!irq_declined && !InterlockedCompareExchange(&d->lock_waiters, 0, 0))
         return;
     d->lock_handoff_waiting = true;
     qemu_cond_timedwait(&d->lock_handoff_cond, &d->lock, 1);
