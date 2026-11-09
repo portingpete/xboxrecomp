@@ -28,6 +28,7 @@ const unsigned pc_video_enemy_health_count = 8;
 static INIT_ONCE s_once = INIT_ONCE_STATIC_INIT;
 static SRWLOCK s_lock = SRWLOCK_INIT;
 static volatile LONG s_generation, s_aspect, s_fov_milli, s_blur_off, s_split;
+static DWORD s_poll_at;
 #else
 static int s_once_done;
 static unsigned s_generation, s_aspect, s_fov_milli, s_blur_off, s_split;
@@ -230,6 +231,12 @@ static int apply_key(PcVideoSettings *s, const char *key, const char *value)
         if (parse_uint(value, 50, 1000, &u) && in_list(pc_video_bullet_damages, pc_video_bullet_damage_count, u)) { s->bullet_damage = u; return 1; }
     } else if (!_stricmp(key, "enemy_health")) {
         if (parse_uint(value, 25, 400, &u) && in_list(pc_video_enemy_healths, pc_video_enemy_health_count, u)) { s->enemy_health = u; return 1; }
+    } else if (!_stricmp(key, "sprint")) {
+        if (!_stricmp(value, "on")) { s->sprint = 1; return 1; }
+        if (!_stricmp(value, "off")) { s->sprint = 0; return 1; }
+    } else if (!_stricmp(key, "jump")) {
+        if (!_stricmp(value, "on")) { s->jump = 1; return 1; }
+        if (!_stricmp(value, "off")) { s->jump = 0; return 1; }
     } else if (!_stricmp(key, "aim_mode")) {
         if (!_stricmp(value, "toggle")) { s->aim_hold = 0; return 1; }
         if (!_stricmp(value, "hold")) { s->aim_hold = 1; return 1; }
@@ -307,6 +314,8 @@ size_t pc_video_format(const PcVideoSettings *s, char *out, size_t cap)
         "bullet_damage=%u\n"
         "enemy_health=%u\n"
         "headshot_instakill=%s\n"
+        "sprint=%s\n"
+        "jump=%s\n"
         "aim_mode=%s\n"
         "split_screen=%s\n",
         s->internal_height, s->window_width, s->window_height,
@@ -322,7 +331,7 @@ size_t pc_video_format(const PcVideoSettings *s, char *out, size_t cap)
         k_refl_names[s->reflections < PCV_REFL_COUNT ? s->reflections : PCV_REFL_HIGH], s->ray_tracing ? "on" : "off",
         k_crosshair_names[s->crosshair < CROSSHAIR_COUNT ? s->crosshair : 0], s->hitmarkers ? "on" : "off",
         s->optional_secondaries ? "on" : "off", s->lod_distance, s->bullet_damage, s->enemy_health,
-        s->headshot_instakill ? "on" : "off", s->aim_hold ? "hold" : "toggle", s->split_screen ? "on" : "off");
+        s->headshot_instakill ? "on" : "off", s->sprint ? "on" : "off", s->jump ? "on" : "off", s->aim_hold ? "hold" : "toggle", s->split_screen ? "on" : "off");
     return n < 0 ? 0 : (size_t)n;
 }
 
@@ -488,6 +497,9 @@ static void publish_mirrors(const PcVideoSettings *s)
 
 static void do_init(const char *path_override)
 {
+#if defined(_WIN32)
+    s_poll_at = GetTickCount() - 250u;
+#endif
     const char *p = path_override ? path_override : env_text("RECOMP_VIDEO_INI");
     pc_video_defaults(&s_file);
     snprintf(s_path, sizeof(s_path), "%s", p ? p : "local\\video.ini");
@@ -608,7 +620,7 @@ static int valid_settings(const PcVideoSettings *s)
            in_list(pc_video_lod_distances, pc_video_lod_distance_count, s->lod_distance) &&
            in_list(pc_video_bullet_damages, pc_video_bullet_damage_count, s->bullet_damage) &&
            in_list(pc_video_enemy_healths, pc_video_enemy_health_count, s->enemy_health) && s->headshot_instakill <= 1 &&
-           s->aim_hold <= 1;
+           s->aim_hold <= 1 && s->sprint <= 1 && s->jump <= 1;
 }
 
 /* The new values over the current ones, except where the environment holds a field. */
@@ -645,7 +657,7 @@ static PcVideoSettings merge_unlocked(const PcVideoSettings *base, const PcVideo
     return r;
 }
 
-static int publish(const PcVideoSettings *wanted, int announce)
+static int publish(const PcVideoSettings *wanted, int announce, int persist)
 {
     PcVideoSettings next, file_next, before;
     unsigned ow, oh, nw, nh, orw, orh, nrw, nrh;
@@ -662,7 +674,7 @@ static int publish(const PcVideoSettings *wanted, int announce)
     publish_mirrors(&s_cur);
     hook = s_resize_hook;
     WRITE_UNLOCK();
-    save_file(&file_next);
+    if (persist) save_file(&file_next);
     if (announce) {
 #if defined(_WIN32)
         InterlockedIncrement(&s_generation);
@@ -678,13 +690,37 @@ static int publish(const PcVideoSettings *wanted, int announce)
     return 1;
 }
 
-int pc_video_set(const PcVideoSettings *wanted) { return publish(wanted, 1); }
+int pc_video_set(const PcVideoSettings *wanted) { return publish(wanted, 1, 1); }
+
+void pc_video_poll_file(void)
+{
+#if defined(_WIN32)
+    DWORD now = GetTickCount();
+    PcVideoSettings wanted, before;
+    char old_text[1024], new_text[1024];
+    pc_video_init();
+    if ((DWORD)(now - s_poll_at) < 250u) return;
+    s_poll_at = now;
+    READ_LOCK();
+    before = s_file;
+    READ_UNLOCK();
+    wanted = before;
+    if (load_file(&wanted) <= 0 || !valid_settings(&wanted)) return;
+    wanted = merge_unlocked(&before, &wanted, s_locked);
+    pc_video_format(&before, old_text, sizeof(old_text));
+    pc_video_format(&wanted, new_text, sizeof(new_text));
+    if (strcmp(old_text, new_text) == 0) return;
+    /* Reuse the in-game path: generation, camera mirrors and queued renderer resize.
+     * Do not write back over the launcher's atomic replacement. */
+    if (publish(&wanted, 1, 0)) fprintf(stderr, "[VIDEO] launcher settings applied live\n");
+#endif
+}
 
 void pc_video_reset(void)
 {
     PcVideoSettings d;
     pc_video_defaults(&d);
-    publish(&d, 1);
+    publish(&d, 1, 1);
 }
 
 void pc_video_note_borderless(unsigned borderless)

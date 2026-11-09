@@ -10,8 +10,8 @@
  *   controller           left stick move, right stick look, triggers down / up, White / Black field of view,
  *                        Y takes a photo, X hides the panel
  *
- * The camera starts where the game's camera is and stays within a radius of that point and a band of heights
- * around it, so it cannot leave the built level. The game project owns guest memory: it asks pc_photo_camera for
+ * The camera starts where the game's camera is. Bounded ranges limit distance and height around that point;
+ * FREE removes both limits to explore the loaded level. The game project owns guest memory: it asks pc_photo_camera for
  * the camera matrix every world-camera update and draws with it, scales its view window by pc_photo_zoom, and
  * writes the photos (PcPhotoHost).
  *

@@ -27,7 +27,7 @@
 
 static const double k_speeds[] = { 0.75, 1.5, 3.0, 6.0 };           /* metres a second: slow .. very fast */
 static const char *const k_speed_names[] = { "SLOW", "NORMAL", "FAST", "VERY FAST" };
-static const double k_ranges[] = { 6.0, 12.0, 20.0, 30.0 };          /* metres from where photo mode started */
+static const double k_ranges[] = { 6.0, 12.0, 20.0, 30.0, 0.0 };     /* metres from where photo mode started; 0 = FREE */
 #define PCP_BELOW 3.0                    /* how far below the start the camera may go */
 #define PCP_MOUSE_DEG 0.06               /* degrees a mouse count, as gameplay at sensitivity 1 */
 #define PCP_STICK_DEG 110.0              /* degrees a second, stick fully over */
@@ -231,7 +231,9 @@ size_t pc_photo_row_value(int row, char *out, size_t cap)
     case PCP_ROW_ROLL: n = snprintf(out, cap, "%d", (int)floor(s_roll / PCP_DEG + (s_roll >= 0 ? 0.5 : -0.5))); break;
     case PCP_ROW_WEAPON: n = snprintf(out, cap, "%s", s_show_weapon ? "SHOWN" : "HIDDEN"); break;
     case PCP_ROW_SPEED: n = snprintf(out, cap, "%s", k_speed_names[s_speed]); break;
-    case PCP_ROW_LIMIT: n = snprintf(out, cap, "%d M", (int)k_ranges[s_range]); break;
+    case PCP_ROW_LIMIT:
+        n = k_ranges[s_range] > 0 ? snprintf(out, cap, "%d M", (int)k_ranges[s_range]) : snprintf(out, cap, "FREE");
+        break;
     default: out[0] = 0; break;
     }
     ReleaseSRWLockShared(&s_lock);
@@ -482,14 +484,16 @@ int pc_photo_camera(float m[4][3], float half_y)
     speed = k_speeds[s_speed] * ((keys & K_FAST) ? 3.0 : 1.0) * ((keys & K_SLOW) ? 0.25 : 1.0);
     for (k = 0; k < 3; k++) s_pos[k] += clampd(move[k], -1.5, 1.5) * speed * dt;
 
-    /* stay near where photo mode started: the level has no outside */
-    dx = s_pos[0] - s_anchor[0]; dz = s_pos[2] - s_anchor[2];
-    dist = sqrt(dx * dx + dz * dz);
-    if (dist > k_ranges[s_range]) {
-        s_pos[0] = s_anchor[0] + dx * k_ranges[s_range] / dist;
-        s_pos[2] = s_anchor[2] + dz * k_ranges[s_range] / dist;
+    /* stay near where photo mode started: the level has no outside. FREE (0) lifts both limits. */
+    if (k_ranges[s_range] > 0) {
+        dx = s_pos[0] - s_anchor[0]; dz = s_pos[2] - s_anchor[2];
+        dist = sqrt(dx * dx + dz * dz);
+        if (dist > k_ranges[s_range]) {
+            s_pos[0] = s_anchor[0] + dx * k_ranges[s_range] / dist;
+            s_pos[2] = s_anchor[2] + dz * k_ranges[s_range] / dist;
+        }
+        s_pos[1] = clampd(s_pos[1], s_anchor[1] - PCP_BELOW, s_anchor[1] + k_ranges[s_range] * 0.5);
     }
-    s_pos[1] = clampd(s_pos[1], s_anchor[1] - PCP_BELOW, s_anchor[1] + k_ranges[s_range] * 0.5);
 
     if (InterlockedExchange(&s_shot_request, 0)) shoot();
 

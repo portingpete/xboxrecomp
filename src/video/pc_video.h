@@ -75,6 +75,8 @@ typedef struct PcVideoSettings {
     unsigned bullet_damage;                    /* percentage of player bullet damage against enemies */
     unsigned enemy_health;                     /* percentage of enemy health at spawn */
     unsigned headshot_instakill;                /* 1 = confirmed player headshots kill enemies */
+    unsigned sprint;                           /* optional PC movement, off by default */
+    unsigned jump;
     unsigned aim_hold;                         /* 0 = original toggle, 1 = hold the aim button */
     unsigned split_screen;                    /* 1 = split-screen, player two in the bottom half (pc_split.h) */
     unsigned render_override_w, render_override_h; /* both non-zero: an explicit raster size (RECOMP_RENDER_*) */
@@ -106,6 +108,8 @@ extern const unsigned pc_video_enemy_healths[], pc_video_enemy_health_count;
 /* Reads the settings file and the environment once (idempotent, thread safe). */
 void pc_video_init(void);
 void pc_video_get(PcVideoSettings *out);
+/* Presenter thread only: import launcher edits, at most four file reads per second. */
+void pc_video_poll_file(void);
 unsigned pc_video_locked(void);
 /* Bumped by every successful pc_video_set. Cheap enough to poll every frame. */
 unsigned pc_video_generation(void);
