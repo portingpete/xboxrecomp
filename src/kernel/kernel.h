@@ -827,7 +827,8 @@ BOOLEAN xbox_SetInterruptServiceTryEnter(uint32_t vector, int (*try_enter)(void 
 #define XBOX_APU_VECTOR 5u    /* MCPX APU */
 
 /* Sleep for a thread that polls and has no event to block on. Returns 0 without
- * sleeping when RECOMP_IDLE_WAIT=0, so the caller keeps its spin (thread_placement.c). */
+ * sleeping when idle waits are off (RECOMP_IDLE_WAIT=0, and by default on native
+ * Windows), so the caller keeps its spin (thread_placement.c). */
 int xbox_IdleWaitEnabled(void);
 int xbox_IdleWait(unsigned int microseconds);
 

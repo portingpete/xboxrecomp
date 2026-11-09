@@ -19,7 +19,9 @@
  * there keeps a core busy for nothing. Windows rounds the sleep up to its timer period, 1 ms once the vblank thread has
  * called timeBeginPeriod; Wine honours microseconds.
  *
- *   RECOMP_IDLE_WAIT=0              keep spinning: xbox_IdleWait returns 0 without sleeping
+ *   RECOMP_IDLE_WAIT=1              sleep (the default under Wine, where it was measured)
+ *   RECOMP_IDLE_WAIT=0              keep spinning: xbox_IdleWait returns 0 without sleeping (the default on Windows,
+ *                                   whose timer period turns these sleeps into 1 ms or more; not yet measured there)
  */
 #include <windows.h>
 #include <stdio.h>
@@ -87,7 +89,16 @@ int xbox_IdleWaitEnabled(void)
     static int on = -1;
     if (on < 0) {
         const char *e = getenv("RECOMP_IDLE_WAIT");
-        on = !(e && *e == '0');
+        if (e && *e) {
+            on = *e != '0';
+        } else {
+#if defined(_WIN32)
+            const HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+            on = ntdll && GetProcAddress(ntdll, "wine_get_version") != NULL;
+#else
+            on = 1;
+#endif
+        }
     }
     return on;
 }
